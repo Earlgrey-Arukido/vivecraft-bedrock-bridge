@@ -1,0 +1,30 @@
+plugins {
+    java
+}
+
+group = 'io.github.earlgreyarukido'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'papermc'
+        url = 'https://repo.papermc.io/repository/maven-public/'
+    }
+}
+
+dependencies {
+    // Paper API (コンパイルのみ)。Vivecraft Spigot Extension への依存は
+    // メタデータ経由の疎結合なので、コンパイル時依存は不要。
+    compileOnly 'io.papermc.paper:paper-api:1.21.8-R0.1-SNAPSHOT'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.jar {
+    archiveFileName = 'VivecraftBedrockBridge.jar'
+}
