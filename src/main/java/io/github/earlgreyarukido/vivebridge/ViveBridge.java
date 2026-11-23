@@ -10,6 +10,7 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.SkullMeta;
@@ -24,7 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * VivecraftBedrockBridge (v0.1.0)
+ * VivecraftBedrockBridge (v0.2.0)
  *
  * Vivecraft (Java VR) プレイヤーのポーズを Vivecraft Spigot Extension (VSE) の
  * メタデータ経由で読み取り、追従する防具立て（マネキン）に反映するプラグイン。
@@ -51,6 +52,10 @@ public class ViveBridge extends JavaPlugin implements Listener {
     private final Map<UUID, ArmorStand> mannequins = new HashMap<>();
     private int tickCounter = 0;
 
+    // Floodgate API への反射アクセス (コンパイル依存を持たないための疎結合)
+    private java.lang.reflect.Method floodgateIsPlayerMethod = null;
+    private boolean floodgateLookupDone = false;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -68,12 +73,23 @@ public class ViveBridge extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
-        for (ArmorStand stand : mannequins.values()) {
+        for (Map.Entry<UUID, ArmorStand> entry : mannequins.entrySet()) {
+            Player owner = Bukkit.getPlayer(entry.getKey());
+            if (owner != null) {
+                restoreVisibility(owner);
+            }
+            ArmorStand stand = entry.getValue();
             if (stand != null && !stand.isDead()) {
                 stand.remove();
             }
         }
         mannequins.clear();
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        // 参加直後は表示出し分けを次tickで適用する
+        Bukkit.getScheduler().runTaskLater(this, this::updateVisibility, 5L);
     }
 
     @EventHandler
@@ -130,8 +146,27 @@ public class ViveBridge extends JavaPlugin implements Listener {
     private void tick() {
         tickCounter++;
         boolean debugLog = getConfig().getBoolean("debug-pose-log", false);
+        boolean demoMode = getConfig().getBoolean("demo-mode", false);
+        // 対象でなくなったプレイヤーのマネキンを片付ける (VR解除時など。しるふぁレビュー指摘, v0.1.1)
+        mannequins.entrySet().removeIf(entry -> {
+            Player owner = Bukkit.getPlayer(entry.getKey());
+            if (owner == null) {
+                return false; // 退出時は onQuit で処理
+            }
+            if (isVrPlayer(owner) || demoMode) {
+                return false;
+            }
+            restoreVisibility(owner);
+            ArmorStand stand = entry.getValue();
+            if (stand != null && !stand.isDead()) {
+                stand.remove();
+            }
+            getLogger().info(owner.getName() + " のマネキンを削除しました (対象外になったため)。");
+            return true;
+        });
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!isVrPlayer(player)) {
+            boolean vr = isVrPlayer(player);
+            if (!vr && !demoMode) {
                 continue;
             }
             ArmorStand stand = mannequins.get(player.getUniqueId());
@@ -139,10 +174,17 @@ public class ViveBridge extends JavaPlugin implements Listener {
                 stand = spawnMannequin(player);
                 mannequins.put(player.getUniqueId(), stand);
             }
-            updateMannequin(player, stand);
-            if (debugLog && tickCounter % 10 == 0) {
-                logPose(player);
+            if (vr) {
+                updateMannequin(player, stand);
+                if (debugLog && tickCounter % 10 == 0) {
+                    logPose(player);
+                }
+            } else {
+                updateDemoMannequin(player, stand);
             }
+        }
+        if (demoMode && tickCounter % 20 == 0) {
+            updateVisibility();
         }
     }
 
@@ -152,6 +194,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
         stand.setBasePlate(false);
         stand.setGravity(false);
         stand.setInvulnerable(true);
+        stand.setCollidable(false);
         stand.setPersistent(false);
         stand.setCanPickupItems(false);
         stand.setSilent(true);
@@ -224,6 +267,104 @@ public class ViveBridge extends JavaPlugin implements Listener {
             stand.setLeftLegPose(directionToArmPose(hip, leftFoot, forward, right));
         }
     }
+
+    // ------------------------------------------------------------------
+    // デモモード (VR実機なしで統合版表示と出し分けを検証するための擬似ポーズ)
+    // ------------------------------------------------------------------
+
+    private void updateDemoMannequin(Player player, ArmorStand stand) {
+        Location base = player.getLocation().clone();
+        base.setPitch(0f);
+        stand.teleport(base);
+
+        double t = tickCounter * 0.25;
+        // 頭: プレイヤーの視線方向 + ゆっくり左右に揺れる
+        stand.setHeadPose(new EulerAngle(
+            Math.toRadians(player.getLocation().getPitch()),
+            Math.toRadians(Math.sin(t * 0.5) * 20),
+            0));
+        // 右腕: 大きく上げて振る (統合版で動きが届くか一番分かりやすいポーズ)
+        stand.setRightArmPose(new EulerAngle(
+            -2.2 + Math.sin(t) * 0.35,
+            0,
+            Math.sin(t) * 0.45));
+        // 左腕: ゆっくり前後に振る
+        stand.setLeftArmPose(new EulerAngle(Math.sin(t * 0.5) * 0.6, 0, 0.12));
+        // 脚: 交互に小さく前後 (その場で足踏み風)
+        stand.setRightLegPose(new EulerAngle(Math.sin(t * 0.5) * 0.35, 0, 0));
+        stand.setLeftLegPose(new EulerAngle(-Math.sin(t * 0.5) * 0.35, 0, 0));
+    }
+
+    // ------------------------------------------------------------------
+    // 表示の出し分け (Phase 3 先行実装: デモモード時のみ有効)
+    // 統合版プレイヤーには本人の通常モデルを隠してマネキンを見せ、
+    // Java版プレイヤーにはマネキンを隠して通常モデルを見せる。
+    // ------------------------------------------------------------------
+
+    private void updateVisibility() {
+        if (!getConfig().getBoolean("demo-mode", false)) {
+            return;
+        }
+        for (Map.Entry<UUID, ArmorStand> entry : mannequins.entrySet()) {
+            Player owner = Bukkit.getPlayer(entry.getKey());
+            ArmorStand stand = entry.getValue();
+            if (owner == null || stand == null || stand.isDead()) {
+                continue;
+            }
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                if (viewer.getUniqueId().equals(owner.getUniqueId())) {
+                    continue;
+                }
+                if (isBedrockPlayer(viewer)) {
+                    viewer.hideEntity(this, owner);
+                    viewer.showEntity(this, stand);
+                } else {
+                    viewer.showEntity(this, owner);
+                    viewer.hideEntity(this, stand);
+                }
+            }
+        }
+    }
+
+    /** 出し分けを解除し、全員に本人モデルが見える状態へ戻す。 */
+    private void restoreVisibility(Player owner) {
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            if (!viewer.getUniqueId().equals(owner.getUniqueId())) {
+                viewer.showEntity(this, owner);
+            }
+        }
+    }
+
+    /** Floodgate 経由の統合版プレイヤーかどうか。Floodgate API を反射で参照する。 */
+    private boolean isBedrockPlayer(Player player) {
+        if (!floodgateLookupDone) {
+            floodgateLookupDone = true;
+            try {
+                Plugin fg = Bukkit.getPluginManager().getPlugin("floodgate");
+                if (fg != null) {
+                    Class<?> apiClass = Class.forName("org.geysermc.floodgate.api.FloodgateApi");
+                    Object api = apiClass.getMethod("getInstance").invoke(null);
+                    if (api != null) {
+                        floodgateIsPlayerMethod = apiClass.getMethod("isFloodgatePlayer", UUID.class);
+                        floodgateApiHolder = api;
+                    }
+                }
+            } catch (Exception e) {
+                getLogger().warning("Floodgate API の参照に失敗しました: " + e.getMessage());
+            }
+        }
+        if (floodgateIsPlayerMethod == null || floodgateApiHolder == null) {
+            return false;
+        }
+        try {
+            Object result = floodgateIsPlayerMethod.invoke(floodgateApiHolder, player.getUniqueId());
+            return Boolean.TRUE.equals(result);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Object floodgateApiHolder = null;
 
     /**
      * 関節 (肩/腰) から末端 (手/足) へのワールド方向を、防具立ての部位ポーズ
@@ -300,7 +441,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
                             + " / マネキン: " + (mannequins.containsKey(p.getUniqueId()) ? "あり" : "なし"));
                     }
                 }
-                sender.sendMessage("[ViveBridge] VRプレイヤー " + vrCount + " 人 / マネキン " + mannequins.size() + " 体");
+                sender.sendMessage("[ViveBridge] VRプレイヤー " + vrCount + " 人 / マネキン " + mannequins.size() + " 体"
+                    + " / デモモード: " + (getConfig().getBoolean("demo-mode", false) ? "ON" : "OFF"));
                 return true;
         }
     }
