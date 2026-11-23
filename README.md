@@ -1,5 +1,7 @@
 # VivecraftBedrockBridge
 
+日本語 | [English](README.en.md)
+
 **Vivecraft（Java版VR）のプレイヤーの動きを、統合版（Bedrock）のプレイヤーにも見せる**ための Paper プラグインです。
 
 通常、Vivecraft の頭・腕・脚の動きは Vivecraft 同士でしか見えません。Geyser 経由の統合版プレイヤーには通常のプレイヤーモデルしか表示されません。
