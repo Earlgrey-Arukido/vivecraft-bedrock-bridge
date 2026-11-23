@@ -4,6 +4,12 @@
 # Altare 無料枠 (CPU 125%) では 2〜4 推奨。
 update-interval-ticks: 2
 
+# デモモード (デフォルト false)。true にすると VR でないプレイヤーにもマネキンを付け、
+# サイン波の擬似ポーズで「手を振る・足踏み」を再現する。VR実機なしで
+# 統合版へのポーズ表示と、統合版/Java版での表示出し分け (Phase 3) を検証するための機能。
+# 本番運用・VR実地テスト時は false のままにすること。
+demo-mode: false
+
 # true にすると VR プレイヤーのポーズ座標を定期的にコンソールへ出力する (Phase 1 実証用)。
 debug-pose-log: false
 
