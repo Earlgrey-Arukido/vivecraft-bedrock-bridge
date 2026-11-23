@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * VivecraftBedrockBridge (v0.2.0)
+ * VivecraftBedrockBridge (v0.3.0)
  *
  * Vivecraft (Java VR) プレイヤーのポーズを Vivecraft Spigot Extension (VSE) の
  * メタデータ経由で読み取り、追従する防具立て（マネキン）に反映するプラグイン。
@@ -183,7 +183,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
                 updateDemoMannequin(player, stand);
             }
         }
-        if (demoMode && tickCounter % 20 == 0) {
+        if (tickCounter % 20 == 0 && !mannequins.isEmpty()) {
             updateVisibility();
         }
     }
@@ -242,7 +242,9 @@ public class ViveBridge extends JavaPlugin implements Listener {
         Vector forward = yawToVector(bodyYaw);
         Vector right = new Vector(-Math.cos(Math.toRadians(bodyYaw)), 0, -Math.sin(Math.toRadians(bodyYaw)));
 
-        Location shoulderBase = base.clone().add(0, 1.38, 0);
+        // 肩位置: 頭 (HMD) の約0.32m下。足元+固定値でなく頭基準にすることで、
+        // しゃがみや seated でも肩と手の相対位置が崩れにくい (v0.3.0)
+        Location shoulderBase = headLoc.clone().add(0, -0.32, 0);
         Location rightHand = bodyPartPos(player, "righthand");
         Location leftHand = bodyPartPos(player, "lefthand");
         if (rightHand != null) {
@@ -254,8 +256,9 @@ public class ViveBridge extends JavaPlugin implements Listener {
             stand.setLeftArmPose(directionToArmPose(shoulder, leftHand, forward, right));
         }
 
-        // 脚ポーズ: FBT で足データがある場合のみ (腰下の付け根から足先への方向)
-        Location hipBase = base.clone().add(0, 0.86, 0);
+        // 脚ポーズ: FBT で足データがある場合のみ。
+        // 股関節の高さは waist メタデータがあればその位置、なければ足元+0.86m。
+        Location hipBase = waistLoc != null ? waistLoc.clone() : base.clone().add(0, 0.86, 0);
         Location rightFoot = bodyPartPos(player, "rightfoot");
         Location leftFoot = bodyPartPos(player, "leftfoot");
         if (rightFoot != null) {
@@ -296,15 +299,17 @@ public class ViveBridge extends JavaPlugin implements Listener {
     }
 
     // ------------------------------------------------------------------
-    // 表示の出し分け (Phase 3 先行実装: デモモード時のみ有効)
+    // 表示の出し分け (Phase 3: VRモード・デモモード共通)
     // 統合版プレイヤーには本人の通常モデルを隠してマネキンを見せ、
     // Java版プレイヤーにはマネキンを隠して通常モデルを見せる。
     // ------------------------------------------------------------------
 
     private void updateVisibility() {
-        if (!getConfig().getBoolean("demo-mode", false)) {
+        if (mannequins.isEmpty()) {
             return;
         }
+        // 目視確認用トグル: true の間は Java 版プレイヤーにもマネキンを見せる
+        boolean showToJava = getConfig().getBoolean("show-mannequin-to-java", false);
         for (Map.Entry<UUID, ArmorStand> entry : mannequins.entrySet()) {
             Player owner = Bukkit.getPlayer(entry.getKey());
             ArmorStand stand = entry.getValue();
@@ -317,6 +322,9 @@ public class ViveBridge extends JavaPlugin implements Listener {
                 }
                 if (isBedrockPlayer(viewer)) {
                     viewer.hideEntity(this, owner);
+                    viewer.showEntity(this, stand);
+                } else if (showToJava) {
+                    viewer.showEntity(this, owner);
                     viewer.showEntity(this, stand);
                 } else {
                     viewer.showEntity(this, owner);
@@ -442,7 +450,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
                     }
                 }
                 sender.sendMessage("[ViveBridge] VRプレイヤー " + vrCount + " 人 / マネキン " + mannequins.size() + " 体"
-                    + " / デモモード: " + (getConfig().getBoolean("demo-mode", false) ? "ON" : "OFF"));
+                    + " / デモモード: " + (getConfig().getBoolean("demo-mode", false) ? "ON" : "OFF")
+                    + " / Java向けマネキン表示: " + (getConfig().getBoolean("show-mannequin-to-java", false) ? "ON" : "OFF"));
                 return true;
         }
     }
