@@ -1,0 +1,11 @@
+# VivecraftBedrockBridge 設定
+
+# マネキンのポーズ更新間隔 (tick)。小さいほど滑らかだがサーバー負荷が上がる。
+# Altare 無料枠 (CPU 125%) では 2〜4 推奨。
+update-interval-ticks: 2
+
+# true にすると VR プレイヤーのポーズ座標を定期的にコンソールへ出力する (Phase 1 実証用)。
+debug-pose-log: false
+
+# マネキンの名前タグの末尾につける文字。
+mannequin-name-suffix: " (VR)"
