@@ -94,3 +94,20 @@ Altare 障害の解消後に v0.3.0 を導入し、この順で確認する。
 - [ ] Java 版からマネキンの表示/非表示ルールが意図どおり（必要なら `show-mannequin-to-java: true` で目視確認）
 - [ ] `demo-mode: false` に戻したとき・退出・VR解除時にマネキンが残らず消える
 - [ ] Altare 無料枠（CPU 125%・ストックホルム経由）で、更新間隔 2 tick のカクつきやサーバー負荷に問題がない
+
+## ミーナ（Claude）レビューへの対応（2026-11-24、v0.3.1）
+
+コードレビュー:
+- 腕ポーズ計算が水平付近で破綻 → rx の分母を hypot(localX, localY) に変更（符号確認はデモ/実機）
+- 出し分けの穴（生成直後は全員に見える、本人に自分のマネキンが見える）→ setVisibleByDefault(false) + 見せる相手だけ showEntity、生成直後に即時出し分け
+- tickCounter が実行回数ベース → 経過 tick 数に変更
+- Floodgate 参照の失敗固定 → 100 tick に1回だけ再試行
+- reload で更新間隔が反映されない → スケジュール再登録
+- waist なし時の体の向き → 頭へ最大約60度/秒で遅れて追従
+
+Stage 2 設計への反映（docs/stage2-prototype-design.md）:
+- キャリア識別に scoreboard tag は使えない（Geyser から見えない）。フラグの組み合わせや特定装備を目印にする案を優先確認
+- プロパティ range を [-360, 360] に拡大 + サーバー側で角度を連続化（unwrap）。±180° 境界の反転対策
+- S2-0〜S2-2 は手元 PC の Paper + Geyser で実施可能（Altare 不要）
+- Stage 2 でも防具立てポーズ更新を継続し、パックなし統合版へのフォールバックを残す
+- Paper から GeyserApi を直接呼べるか S2-0 で確認（同一 JVM のため）
