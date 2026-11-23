@@ -45,6 +45,7 @@ Put the output `build/libs/VivecraftBedrockBridge.jar` into your server's `plugi
 
 ## Status
 
+- v0.3.1: Fixes from Mina's (Claude) code review (arm-pose math near horizontal, mannequin visibility gap at spawn, tick counter, Floodgate retry, reload interval, lagging body yaw)
 - v0.3.0: Phase 3 per-viewer visibility now also applies in VR mode, shoulder/hip origins moved to head.pos / waist, added `show-mannequin-to-java` toggle for Java-side visual checks
 - v0.2.0: Demo mode (synthetic poses to verify Bedrock rendering without VR) + early Phase 3 per-viewer visibility (demo mode only)
 - v0.1.1: Fixed mannequins remaining after a player leaves VR mode; mannequins are now non-collidable
