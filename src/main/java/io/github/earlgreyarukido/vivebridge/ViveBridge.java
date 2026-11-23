@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * VivecraftBedrockBridge (v0.3.0)
+ * VivecraftBedrockBridge (v0.3.1)
  *
  * Vivecraft (Java VR) プレイヤーのポーズを Vivecraft Spigot Extension (VSE) の
  * メタデータ経由で読み取り、追従する防具立て（マネキン）に反映するプラグイン。
@@ -50,11 +50,14 @@ public class ViveBridge extends JavaPlugin implements Listener {
     private static final String VSE_PLUGIN_NAME = "Vivecraft-Spigot-Extension";
 
     private final Map<UUID, ArmorStand> mannequins = new HashMap<>();
+    private final Map<UUID, Float> bodyYawLag = new HashMap<>();
+    private org.bukkit.scheduler.BukkitTask tickTask = null;
     private int tickCounter = 0;
 
     // Floodgate API への反射アクセス (コンパイル依存を持たないための疎結合)
     private java.lang.reflect.Method floodgateIsPlayerMethod = null;
-    private boolean floodgateLookupDone = false;
+    private Object floodgateApiHolder = null;
+    private long lastFloodgateAttemptTick = -1000L;
 
     @Override
     public void onEnable() {
@@ -66,9 +69,17 @@ public class ViveBridge extends JavaPlugin implements Listener {
             getLogger().info(VSE_PLUGIN_NAME + " " + vse.getDescription().getVersion() + " を検出しました。");
         }
         Bukkit.getPluginManager().registerEvents(this, this);
-        int interval = Math.max(1, getConfig().getInt("update-interval-ticks", 2));
-        Bukkit.getScheduler().runTaskTimer(this, this::tick, 20L, interval);
+        scheduleTickTask();
         getLogger().info("VivecraftBedrockBridge v" + getDescription().getVersion() + " が有効になりました。");
+    }
+
+    /** メインループのスケジュールを config の間隔で (再) 登録する。reload 時にも呼ばれる。 */
+    private void scheduleTickTask() {
+        if (tickTask != null) {
+            tickTask.cancel();
+        }
+        int interval = Math.max(1, getConfig().getInt("update-interval-ticks", 2));
+        tickTask = Bukkit.getScheduler().runTaskTimer(this, this::tick, 20L, interval);
     }
 
     @Override
@@ -94,6 +105,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        bodyYawLag.remove(event.getPlayer().getUniqueId());
         ArmorStand stand = mannequins.remove(event.getPlayer().getUniqueId());
         if (stand != null && !stand.isDead()) {
             stand.remove();
@@ -144,7 +156,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
     // ------------------------------------------------------------------
 
     private void tick() {
-        tickCounter++;
+        // tickCounter は「実行回数」でなく「経過 tick 数」で数える (ミーナのレビュー指摘, v0.3.1)
+        tickCounter += Math.max(1, getConfig().getInt("update-interval-ticks", 2));
         boolean debugLog = getConfig().getBoolean("debug-pose-log", false);
         boolean demoMode = getConfig().getBoolean("demo-mode", false);
         // 対象でなくなったプレイヤーのマネキンを片付ける (VR解除時など。しるふぁレビュー指摘, v0.1.1)
@@ -157,6 +170,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
                 return false;
             }
             restoreVisibility(owner);
+            bodyYawLag.remove(entry.getKey());
             ArmorStand stand = entry.getValue();
             if (stand != null && !stand.isDead()) {
                 stand.remove();
@@ -164,6 +178,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
             getLogger().info(owner.getName() + " のマネキンを削除しました (対象外になったため)。");
             return true;
         });
+        boolean spawnedAny = false;
         for (Player player : Bukkit.getOnlinePlayers()) {
             boolean vr = isVrPlayer(player);
             if (!vr && !demoMode) {
@@ -173,6 +188,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
             if (stand == null || stand.isDead()) {
                 stand = spawnMannequin(player);
                 mannequins.put(player.getUniqueId(), stand);
+                spawnedAny = true;
             }
             if (vr) {
                 updateMannequin(player, stand);
@@ -183,7 +199,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
                 updateDemoMannequin(player, stand);
             }
         }
-        if (tickCounter % 20 == 0 && !mannequins.isEmpty()) {
+        // 生成直後は即座に出し分けを適用し、新規マネキンや本人モデルが見える時間をなくす
+        if (spawnedAny || (tickCounter % 20 == 0 && !mannequins.isEmpty())) {
             updateVisibility();
         }
     }
@@ -198,6 +215,9 @@ public class ViveBridge extends JavaPlugin implements Listener {
         stand.setPersistent(false);
         stand.setCanPickupItems(false);
         stand.setSilent(true);
+        // デフォルトでは全員から隠し、updateVisibility で見せる相手だけ showEntity する
+        // (生成直後に全員へ見えてしまう穴と、本人に自分のマネキンが見える問題の対策。ミーナのレビュー指摘, v0.3.1)
+        stand.setVisibleByDefault(false);
         stand.setCustomName(player.getName() + getConfig().getString("mannequin-name-suffix", " (VR)"));
         stand.setCustomNameVisible(true);
         // 頭にプレイヤーヘッドを被せて「その人らしさ」を近似する
@@ -218,13 +238,25 @@ public class ViveBridge extends JavaPlugin implements Listener {
             return;
         }
 
-        // 体の向き: 腰 (FBT時) -> 頭 -> プレイヤー本体 の優先順で決める
+        // 体の向き: 腰 (FBT時) -> 頭 の優先順で決める。
+        // 腰がない場合は頭に即時追従させず、遅れて追従させる (首振りが全身回転になるのを防ぐ。ミーナのレビュー指摘, v0.3.1)
         Location waistLoc = bodyPartPos(player, "waist");
         float bodyYaw;
         if (waistLoc != null) {
             bodyYaw = waistLoc.getYaw();
+            bodyYawLag.put(player.getUniqueId(), bodyYaw);
         } else {
-            bodyYaw = headLoc.getYaw();
+            float target = headLoc.getYaw();
+            Float prev = bodyYawLag.get(player.getUniqueId());
+            if (prev == null) {
+                bodyYaw = target;
+            } else {
+                float delta = normalizeAngle(target - prev);
+                float maxStep = 6.0f; // 1回の更新で最大6度まで (間隔2tickなら約60度/秒)
+                float step = Math.max(-maxStep, Math.min(maxStep, delta));
+                bodyYaw = prev + step;
+            }
+            bodyYawLag.put(player.getUniqueId(), bodyYaw);
         }
 
         Location base = player.getLocation().clone();
@@ -280,7 +312,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
         base.setPitch(0f);
         stand.teleport(base);
 
-        double t = tickCounter * 0.25;
+        // tickCounter は経過 tick 数。係数は従来 (実行回数ベース) と同じ波の速さになるよう調整
+        double t = tickCounter * 0.125;
         // 頭: プレイヤーの視線方向 + ゆっくり左右に揺れる
         stand.setHeadPose(new EulerAngle(
             Math.toRadians(player.getLocation().getPitch()),
@@ -345,8 +378,10 @@ public class ViveBridge extends JavaPlugin implements Listener {
 
     /** Floodgate 経由の統合版プレイヤーかどうか。Floodgate API を反射で参照する。 */
     private boolean isBedrockPlayer(Player player) {
-        if (!floodgateLookupDone) {
-            floodgateLookupDone = true;
+        // 解決できていない間は 100 tick に1回だけ再試行する
+        // (getInstance() が null を返す時期に失敗を固定しないため。ミーナのレビュー指摘, v0.3.1)
+        if (floodgateIsPlayerMethod == null && tickCounter - lastFloodgateAttemptTick >= 100) {
+            lastFloodgateAttemptTick = tickCounter;
             try {
                 Plugin fg = Bukkit.getPluginManager().getPlugin("floodgate");
                 if (fg != null) {
@@ -372,12 +407,13 @@ public class ViveBridge extends JavaPlugin implements Listener {
         }
     }
 
-    private Object floodgateApiHolder = null;
-
     /**
      * 関節 (肩/腰) から末端 (手/足) へのワールド方向を、防具立ての部位ポーズ
      * (EulerAngle, ラジアン) に変換する近似。
      * 部位のデフォルト方向は真下 (0,-1,0)。X 回転 = 前後の振り、Z 回転 = 左右の開き。
+     * rx の分母は localY 単体でなく hypot(localX, localY) を使う: 腕が水平付近
+     * (localY≈0) でも前後角が ±90 度に張り付かず、斜め方向を正しく分解できる
+     * (ミーナのレビュー指摘, v0.3.1)。符号の最終確認はデモ/実機で行う。
      */
     private EulerAngle directionToArmPose(Location joint, Location target, Vector forward, Vector right) {
         Vector d = target.toVector().subtract(joint.toVector());
@@ -388,7 +424,7 @@ public class ViveBridge extends JavaPlugin implements Listener {
         double localX = d.dot(right);       // 右が +
         double localY = d.getY();          // 上が +
         double localZ = d.dot(forward);    // 前が +
-        double rx = Math.atan2(-localZ, -localY);
+        double rx = Math.atan2(-localZ, Math.hypot(localX, localY));
         double rz = Math.atan2(localX, -localY);
         return new EulerAngle(rx, 0, rz);
     }
@@ -437,7 +473,8 @@ public class ViveBridge extends JavaPlugin implements Listener {
         switch (sub) {
             case "reload":
                 reloadConfig();
-                sender.sendMessage("[ViveBridge] config を再読み込みしました。");
+                scheduleTickTask();
+                sender.sendMessage("[ViveBridge] config を再読み込みし、更新間隔も再適用しました。");
                 return true;
             case "status":
             default:
