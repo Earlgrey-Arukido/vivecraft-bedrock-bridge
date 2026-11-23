@@ -45,8 +45,11 @@ Put the output `build/libs/VivecraftBedrockBridge.jar` into your server's `plugi
 
 ## Status
 
+- v0.2.0: Demo mode (synthetic poses to verify Bedrock rendering without VR) + early Phase 3 per-viewer visibility (demo mode only)
+- v0.1.1: Fixed mannequins remaining after a player leaves VR mode; mannequins are now non-collidable
 - v0.1.0: Phase 1 (reading poses from VSE metadata) + first version of Phase 2 (mannequin following with head/arm/leg poses)
 - Live testing (checking poses in VR and on Bedrock) is still to come
+- See [CHANGELOG.md](CHANGELOG.md) for details
 
 ## Test Server
 
