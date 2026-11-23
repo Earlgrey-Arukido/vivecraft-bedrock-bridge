@@ -10,6 +10,11 @@ update-interval-ticks: 2
 # 本番運用・VR実地テスト時は false のままにすること。
 demo-mode: false
 
+# Java版プレイヤーにもマネキンを表示するか (目視確認・デバッグ用)
+# 通常は false: Java版にはマネキンを隠し、通常モデルだけを見せる
+# Phase 2 の目視確認などで Java 画面からマネキンを見たいときだけ true
+show-mannequin-to-java: false
+
 # true にすると VR プレイヤーのポーズ座標を定期的にコンソールへ出力する (Phase 1 実証用)。
 debug-pose-log: false
 

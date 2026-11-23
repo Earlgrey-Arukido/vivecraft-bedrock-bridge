@@ -1,5 +1,5 @@
 name: VivecraftBedrockBridge
-version: 0.2.0
+version: 0.3.0
 main: io.github.earlgreyarukido.vivebridge.ViveBridge
 api-version: '1.21'
 description: Shows Vivecraft VR player poses to Bedrock players via a pose-following armor stand (mannequin) through Geyser.
