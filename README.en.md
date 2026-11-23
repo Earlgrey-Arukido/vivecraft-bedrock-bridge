@@ -48,6 +48,15 @@ Put the output `build/libs/VivecraftBedrockBridge.jar` into your server's `plugi
 - v0.1.0: Phase 1 (reading poses from VSE metadata) + first version of Phase 2 (mannequin following with head/arm/leg poses)
 - Live testing (checking poses in VR and on Bedrock) is still to come
 
+## Test Server
+
+A public test server for this plugin is running (expect restarts and changes without notice).
+
+- Address: `vivecraft-view-for-bedrock.go.tryaltare.ai`
+- Java Edition: join with the address only (Paper / Minecraft 26.3)
+- Bedrock Edition: address + port `25073` (via Geyser + Floodgate, no Java account needed)
+- The server is located in Stockholm, so ping from Japan is on the higher side
+
 ## Authors
 
 Arukido (Earlgrey-Arukido) + ALTERNA
