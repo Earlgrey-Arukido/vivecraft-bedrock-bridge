@@ -1,0 +1,14 @@
+{
+  "comment": "登録済み VR プレイヤーの一覧。パック生成・プラグイン・Geyser 拡張はすべてこのファイルを正とする。キーは UUID（改名で壊れないため）。skin_index はパック内テクスチャ配列の並び順と一致させる。",
+  "players": [
+    {
+      "definition": "vivecraftbedrockbridge:vr_avatar_8fe06016_9db2_4bd7_b23e_a2e35da77d8c",
+      "model": "classic",
+      "name": "RK3_Vivecraft",
+      "overlay_used": false,
+      "skin_index": 0,
+      "texture": "textures/entity/vr_avatar_8fe06016_9db2_4bd7_b23e_a2e35da77d8c.png",
+      "uuid": "8fe06016-9db2-4bd7-b23e-a2e35da77d8c"
+    }
+  ]
+}
