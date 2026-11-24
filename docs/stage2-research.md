@@ -60,3 +60,47 @@
 1. 使用中の Geyser ビルド（2.12.1-b1307）に Custom Entity API のクラス群が含まれているか（拡張の最小スケルトンで起動ログ確認）
 2. 登録イベントとプロパティ上書き API の正確なシグネチャ（Javadoc/ソースで確定）
 3. プロパティ float×約30個を 10〜20Hz で更新した際の Altare 環境での負荷と滑らかさの実測
+
+## 追記（2026-11-24）: S2-0 第一確認の結果
+
+使用中と同一ビルドの Geyser-Spigot **2.12.1-b1307** の jar を公式ダウンロードから取得し、クラス一覧を確認した。
+
+- `org.geysermc.geyser.api.entity.custom.CustomEntityDefinition` が存在 → **Custom Entity API は使用中ビルドに含まれている**
+- 登録イベントは **`org.geysermc.geyser.api.event.lifecycle.GeyserDefineEntitiesEvent`** で確定（第1項の未確認事項を解消）
+- プロパティ API も存在: `api.entity.property.GeyserEntityProperty`、`type.GeyserFloatEntityProperty`、`BatchPropertyUpdater`（一括更新用）
+- `org.geysermc.geyser.api.GeyserApi` も jar 内にあり、同一 JVM からの API アクセスの前提は満たす（プラグインから直接呼べるかの実証は S2-0 本体で）
+
+## 追記2（2026-11-24）: API シグネチャの確定（javap による一次確認）
+
+同一ビルド jar に対して javap で API の実シグネチャを確認した。
+
+- **登録**: `GeyserDefineEntitiesEvent.register(CustomEntityDefinition)`。定義は `CustomEntityDefinition.of(Identifier | String)` で作る
+- **プロパティ登録**: 専用イベント `GeyserDefineEntityPropertiesEvent` があり、`registerFloatProperty(エンティティIdentifier, プロパティIdentifier, min, max, デフォルト値)` で float プロパティを登録できる（int / boolean / enum 用も同形）。設計書の range [-360, 360] はこの min/max にそのまま渡せる
+- **個別割り当ての鍵**: `SessionSpawnEntityEvent`（Bedrock セッションごとのスポーンイベント）に **`definition()` の setter** があり、スポーンする個体ごとに定義を差し替えられる。`preSpawnConsumer(Consumer<GeyserEntity>)` でスポーン直前の個体にも触れる → 「タイプ単位でしか置き換えできない」という最悪ケースは回避できる見込みが立った
+- **プロパティ更新**: `GeyserEntity.updateProperty(property, value)` と `updatePropertiesBatched(Consumer<BatchPropertyUpdater>)` が個体単位で用意されている（ストリーミング経路の実在を確認）
+- 残る未確認: SessionSpawnEntityEvent の時点で「自前のマネキン個体」をどう識別するか（preSpawnConsumer 経由の GeyserEntity のデータ（名前等）で判別できるか）、および Paper プラグイン → 拡張への値の受け渡し方法（プラグインメッセージ or 直接 API）
+
+## 追記3（2026-11-24）: 識別方法の確認
+
+- `GeyserEntityDataTypes` の定数を確認した範囲では **名前（NAME）に相当するデータ型は存在しない**。スポーン時点で名前でマネキンを判別する案は採れない
+- 代替の本命: `GeyserEntity.uuid()` / `javaId()` による照合。Paper プラグインは生成したマネキンの UUID を知っているため、それを Geyser 拡張へ共有し、`SessionSpawnEntityEvent` / `preSpawnConsumer` で UUID が一致した個体だけ定義を差し替える
+- 順序の注意: マネキン生成直後に UUID を拡張へ渡せば、統合版クライアントへのスポーン送信より前に共有が間に合う想定（実地確認は S2-0）
+
+## 追記4（2026-11-24）: スポーンイベントから取れる情報（識別設計の確定）
+
+javap でイベント階層を確認した。
+
+- `ServerSpawnEntityEvent`（`SessionSpawnEntityEvent` の Java 側サブクラス）は、イベント自体に **`uuid()`、`entityId()`（Java のエンティティID）、`entityType()`** を持つ。preSpawnConsumer を経由しなくても個体識別ができる
+- `SessionSpawnEntityEvent` 側は `definition()` の取得・差し替えと `connection()`（対象 Bedrock セッション）
+- `preSpawnConsumer` の `GeyserEntity` からは position / geyserId / データ値が取れ、プロパティ更新（updateProperty）もここから繋がる
+- Bukkit の Entity や PersistentDataContainer は Geyser 側イベントからは引けない（Geyser 独自表現のため）→ 印付け方式（方法B）は不採用
+- **識別設計の確定**: プラグインがスポーン時にマネキン UUID を登録 → 拡張が `ServerSpawnEntityEvent.uuid()` と照合 → 一致したら `definition(カスタム定義)` で差し替え。マネキンUUID ↔ プレイヤーUUID の対応表はプラグイン側の既存マップがそのまま使える
+
+## 追記5（2026-11-24）: S2-0 を ALTERNA の VM で前倒し実施した結果
+
+本番と同一構成（Paper 26.3-259 + 固定した Geyser 2.12.1-b1307）を VM 内に構築し、拡張スケルトン（定義登録・プロパティ29個登録・ServerSpawnEntityEvent の UUID 照合ログ、`local-test/` に保存）を読み込ませた。
+
+- **確認できた**: 拡張 jar は実物 Geyser に認識され「Enabled extension VivecraftBedrockBridge / Loaded 1 extension(s)」まで到達。extension.yml の形式（api: 2.12.0）も受理された
+- **VM ではここが限界**: Geyser 本体の初期化が、暗号化セットアップ用の discovery 取得（client.discovery.minecraft-services.net への Java の HTTPS）で失敗し、定義登録イベントの発火前に停止する。切り分けの結論として、これはコードの問題ではなく **VM の出口プロキシと Java の HTTP トンネリングの相性**（python では同 URL が正常に取得できることを確認済み）。ユーザー PC や Altare のような通常回線では発生しない
+- **残りの S2-0 確認**（定義登録ハンドラの発火、UUID 照合での差し替え、対照実験、再起動後の再登録）は、ユーザー PC の Paper + Geyser で実施する。手順とチェックリストは stage2-prototype-design.md の S2-0 節のとおり
+- 副産物: MC 26.1 以降の Paper は **Java 25 以上**が必要（Temurin 25 を ~/tools/jdk-25 に用意済み）。Paperclip の Mojang jar 取得も Java では失敗するため、python で取得して cache/ に配置する方式で回避した
