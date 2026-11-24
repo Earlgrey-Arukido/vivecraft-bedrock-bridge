@@ -1,0 +1,6 @@
+id: vivecraftbedrockbridge
+name: VivecraftBedrockBridge
+main: io.github.earlgreyarukido.vivebridge.ext.ViveBridgeExtension
+version: 0.1.0-s2-0
+api: 2.12.0
+authors: [Earlgrey-Arukido]
